@@ -1,0 +1,142 @@
+name: Patch all recovery.img files
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+jobs:
+  patch_all:
+    name: Patch all directories and produce artifacts
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install runtime dependencies (lz4, tar, core utils)
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends lz4 tar gzip ca-certificates curl
+
+      - name: Make repository tools and scripts executable
+        run: |
+          chmod +x ./script1.sh || true
+          chmod +x ./script2.sh || true
+          if [ -f ./magiskboot ]; then chmod +x ./magiskboot; fi
+          if [ -f ./avbtool ]; then chmod +x ./avbtool; fi
+
+      - name: Show repository root and files for debug
+        run: |
+          echo "Repo root listing:"
+          ls -la
+          echo "Top-level files:"
+          ls -la . | sed -n '1,200p'
+
+      - name: Pre-flight: ensure recovery source exists or fail
+        run: |
+          if [ -f recovery.img ]; then
+            echo "Found recovery.img in repo root"
+          elif [ -f recovery.img.lz4 ]; then
+            echo "Found recovery.img.lz4 in repo root"
+          else
+            echo "No recovery.img or recovery.img.lz4 found in repo root. Checking for any recovery.img in tree..."
+            if find . -type f -name 'recovery.img' | grep -q .; then
+              echo "Found recovery.img elsewhere in repo."
+            else
+              echo "No recovery.img in repository tree. Exiting with failure."
+              exit 1
+            fi
+          fi
+
+      - name: Run preparer / patch scripts in repository (script1.sh then script2.sh)
+        run: |
+          set -euo pipefail
+          # Run script1.sh if present
+          if [ -f ./script1.sh ]; then
+            echo "Running ./script1.sh"
+            ./script1.sh
+          else
+            echo "script1.sh not found â€” skipping"
+          fi
+
+          # If script2.sh exists, run it (expected to perform actual patching)
+          if [ -f ./script2.sh ]; then
+            echo "Running ./script2.sh"
+            ./script2.sh
+          else
+            echo "script2.sh not found â€” skipping"
+          fi
+
+      - name: Optional: run magiskboot/avbtool commands if present (no-op safe)
+        run: |
+          set -euo pipefail
+          if [ -f ./magiskboot ]; then
+            echo "magiskboot present; show version/help"
+            ./magiskboot --help || true
+          fi
+          if [ -f ./avbtool ]; then
+            echo "avbtool present; show help"
+            ./avbtool --help || true
+          fi
+
+      - name: Detect produced .img outputs (exclude original recovery.img)
+        id: detect
+        run: |
+          set -euo pipefail
+          # find all .img files excluding the original recovery.img in repo root
+          mapfile -t IMS < <(find . -type f -name '*.img' ! -path './.github/*' ! -name 'recovery.img' | sed 's|^\./||' | sort -u)
+          if [ "${#IMS[@]}" -eq 0 ]; then
+            echo "No resulting .img files found after patching."
+            echo "::set-output name=files::"
+            exit 0
+          fi
+          printf "%s\n" "${IMS[@]}"
+          # join with space for later steps
+          printf "%s " "${IMS[@]}" > imgs.txt
+          echo "::set-output name=files::$(cat imgs.txt)"
+
+      - name: Show checksums for produced images
+        if: steps.detect.outputs.files != ''
+        run: |
+          set -euo pipefail
+          read -r -a FILES <<< "${{ steps.detect.outputs.files }}"
+          for f in "${FILES[@]}"; do
+            echo "---- $f ----"
+            ls -lh "$f" || true
+            sha256sum "$f" || true
+          done
+
+      - name: Package produced images into a single tar.gz artifact
+        if: steps.detect.outputs.files != ''
+        run: |
+          set -euo pipefail
+          mkdir -p patched_outputs
+          read -r -a FILES <<< "${{ steps.detect.outputs.files }}"
+          for f in "${FILES[@]}"; do
+            # preserve directory structure by copying into temp area with safe names
+            BASENAME=$(basename "$f")
+            cp --parents "$f" patched_outputs/ || cp "$f" "patched_outputs/$BASENAME"
+          done
+          tar -C patched_outputs -czf patched_outputs.tar.gz .
+          ls -lh patched_outputs.tar.gz
+
+      - name: Upload patched outputs artifact
+        if: steps.detect.outputs.files != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: patched-outputs
+          path: patched_outputs.tar.gz
+
+      - name: If no outputs, display helpful debug info
+        if: steps.detect.outputs.files == ''
+        run: |
+          echo "No patched outputs produced. Listing .img files and script outputs for debugging:"
+          find . -maxdepth 4 -type f -name '*.img' -print -exec ls -lh {} \; || true
+          echo "--- last 200 lines of script1.sh (if exists) ---"
+          [ -f script1.sh ] && sed -n '1,200p' script1.sh || true
+          echo "--- last 200 lines of script2.sh (if exists) ---"
+          [ -f script2.sh ] && sed -n '1,200p' script2.sh || true
