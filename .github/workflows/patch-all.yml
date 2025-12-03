@@ -2,7 +2,8 @@ name: Patch all recovery.img files (safe-run)
 
 on:
   push:
-    branches: [ master ]
+    branches:
+      - master
   workflow_dispatch:
 
 jobs:
@@ -42,8 +43,19 @@ jobs:
       - name: Run scripts (safe)
         run: |
           set -euo pipefail
-          [ -f ./script1.sh ] && echo "Running ./script1.sh" && ./script1.sh || echo "script1.sh missing; skipping"
-          [ -f ./script2.sh ] && echo "Running ./script2.sh" && ./script2.sh || echo "script2.sh missing; skipping"
+          if [ -f ./script1.sh ]; then
+            echo "Running ./script1.sh"
+            ./script1.sh
+          else
+            echo "script1.sh missing; skipping"
+          fi
+
+          if [ -f ./script2.sh ]; then
+            echo "Running ./script2.sh"
+            ./script2.sh
+          else
+            echo "script2.sh missing; skipping"
+          fi
 
       - name: Detect outputs (non-original .img)
         id: detect
