@@ -23,10 +23,10 @@ jobs:
 
       - name: Make scripts and binaries executable
         run: |
-          chmod +x ./script1.sh || true
-          chmod +x ./script2.sh || true
-          [ -f ./magiskboot ] && chmod +x ./magiskboot
-          [ -f ./avbtool ] && chmod +x ./avbtool
+          chmod +x ./script1.sh 2>/dev/null || true
+          chmod +x ./script2.sh 2>/dev/null || true
+          if [ -f ./magiskboot ]; then chmod +x ./magiskboot; fi
+          if [ -f ./avbtool ]; then chmod +x ./avbtool; fi
 
       - name: Diagnostics: list repo and check binaries
         run: |
@@ -35,12 +35,12 @@ jobs:
           echo "Find .img files and types:"
           find . -type f -name '*.img' -print -exec file {} \; || true
           if [ -f ./magiskboot ]; then
-            echo "magiskboot:"
+            echo "magiskboot details:"
             file ./magiskboot || true
             ldd ./magiskboot 2>&1 || true
           fi
 
-      - name: Run scripts (safe)
+      - name: Run preparer and patch scripts (if present)
         run: |
           set -euo pipefail
           if [ -f ./script1.sh ]; then
@@ -57,10 +57,11 @@ jobs:
             echo "script2.sh missing; skipping"
           fi
 
-      - name: Detect outputs (non-original .img)
+      - name: Detect produced .img outputs
         id: detect
         run: |
           set -euo pipefail
+          # Find produced .img files, exclude workflow dir and original recovery.img
           mapfile -t OUTS < <(find . -type f -name '*.img' ! -path './.github/*' ! -name 'recovery.img' -print | sed 's|^\./||' | sort -u)
           if [ "${#OUTS[@]}" -eq 0 ]; then
             echo "files=" >> $GITHUB_OUTPUT
